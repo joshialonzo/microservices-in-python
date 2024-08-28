@@ -1,2 +1,13 @@
-# microservices-in-python
-Microservices in Python using Flask, MySQL, MongoDB, RabbitMQ, Docker, and Kubernetes.
+# Microservices in Python
+
+Microservices using:
+
+* Python
+* Flask
+* MySQL
+* MongoDB
+* RabbitMQ
+* Docker
+* Kubernetes
+
+## [Basic Microservices in Python](flask-basics/README.md)

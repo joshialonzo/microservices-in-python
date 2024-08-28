@@ -1,0 +1,14 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flask-basics:1.0
+    ports:
+      - "80:5000"
+    restart: always
+    networks: 
+      - flask-basics-network
+
+networks:
+  flask-basics-network:
