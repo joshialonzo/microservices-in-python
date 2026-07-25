@@ -19,8 +19,8 @@ recorded in [docs/ai-collaboration/](docs/ai-collaboration/):
   the correctness fixture.
 - **[02 — Reconciliation Design](docs/ai-collaboration/02-reconciliation-design.md)** — the matching
   algorithm, merge precedence, and conflict handling, with rejected alternatives.
-- **[03 — Architecture](docs/ai-collaboration/03-architecture.md)** — FastAPI + Next.js on AWS
-  Lambda/DynamoDB via CDK, with Docker Compose as the single-command local path.
+- **[03 — Architecture](docs/ai-collaboration/03-architecture.md)** — FastAPI + Next.js under Docker
+  Compose, with an in-process store rebuilt from the source files on each sync.
 - **[AI collaboration log](docs/ai-collaboration/README.md)** — how AI was used at each phase, and
   what was not delegated.
 

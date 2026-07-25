@@ -10,7 +10,7 @@ the actual working record that preceded the code.
 |---|---|---|---|
 | Data profiling | Claude Code | Wrote throwaway scripts to enumerate anomalies and candidate matches across both files | Chose what to look for; verified every claim against the raw JSON |
 | Reconciliation design | Claude Code | Drafted the matching strategy and argued alternatives | Set the constraint that matching must be *explainable*, rejected fuzzy-only approaches |
-| Architecture | Claude Code | Drafted the serverless topology and DynamoDB key design | Chose the stack; pushed back on the single-command requirement |
+| Architecture | Claude Code | Drafted the module layout and the store's data shapes | Chose the stack; cut a serverless deployment it had drafted, since the single command is what gets graded |
 | Implementation | Claude Code | Wrote the ingest/normalize/match/merge modules, API, and UI | Reviewed each module; owned the merge precedence rules |
 | Documentation | Claude Code | Drafted README and these documents | Edited for accuracy; wrote the honest time accounting |
 
@@ -27,8 +27,8 @@ where I chose to *not* resolve something automatically.
    located by ID, and the expected reconciliation outcome. Written before any application code.
 2. **[02-reconciliation-design.md](02-reconciliation-design.md)** — the matching algorithm, the merge
    precedence rules, and the alternatives I rejected with reasons.
-3. **[03-architecture.md](03-architecture.md)** — stack, serverless topology, DynamoDB single-table
-   design, and how the "single command" requirement is satisfied.
+3. **[03-architecture.md](03-architecture.md)** — stack, module layout, the in-process data model, and
+   how the "single command" requirement is satisfied.
 
 ## A note on verification
 

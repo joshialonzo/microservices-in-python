@@ -6,10 +6,8 @@
 |---|---|
 | API | FastAPI (Python 3.12), Pydantic models |
 | Frontend | Next.js (App Router, TypeScript) |
-| Storage | DynamoDB |
-| Compute | AWS Lambda behind API Gateway (HTTP API) |
-| IaC | AWS CDK (TypeScript) |
-| Local dev | Docker Compose + DynamoDB Local |
+| Storage | In-process store, rebuilt from `data/` on each sync run |
+| Runtime | Docker Compose — Uvicorn + Next.js, nothing else |
 
 **Why this stack.** The reconciliation logic is the substance of the assessment, and Python is the
 right language for it. FastAPI gives typed request/response models and a free OpenAPI page at `/docs`
@@ -17,38 +15,34 @@ right language for it. FastAPI gives typed request/response models and a free Op
 reviewer gets an interactive contract without reading the code. Next.js keeps the frontend typed
 against the same shapes.
 
-**Honest note on the serverless choice.** For 42 records read from two static JSON files, Lambda +
-DynamoDB + CDK is more infrastructure than the problem requires; a single process with an in-memory
-store would satisfy every functional requirement. It is here to demonstrate production
-architecture, and the design below is written so that ambition does not compromise the two things the
-statement actually grades: the single-command start and the README.
+**Why there is no database.** The input is 42 records in two static JSON files, and the sync job
+rebuilds the entire dataset from those files in milliseconds. A database would add a container, a
+schema, a migration story, and a failure mode, and would buy durability that nothing here needs — the
+source of truth is the files, not the store. Adding one to look production-ready would be
+infrastructure as decoration, and it would put a moving part between the reviewer and the single
+command that has to work. The repository stays behind an interface (below), so a persistent
+implementation is a swap rather than a rewrite if the data ever stops being static.
 
 ---
 
 ## The single-command requirement
 
-The statement requires: *"The service should start with a single command (document it)."* A serverless
-stack does not naturally satisfy this, so the local path is the primary documented one:
+The statement requires: *"The service should start with a single command (document it)."* That command
+is the whole deployment story:
 
 ```bash
 docker compose up
 ```
 
-Brings up three containers: DynamoDB Local, the FastAPI app (via Uvicorn, hot-reload), and Next.js.
-An init container runs table creation and the ingest job, so the app is populated the moment it is
-reachable. No AWS account, no credentials, no network needed to evaluate this project.
+Two containers: the FastAPI app (via Uvicorn, hot-reload) and Next.js. The API runs the ingest and
+reconciliation pipeline on startup, so the dataset is populated the moment the service is reachable —
+there is no seeding step to forget. No account, no credentials, no network needed to evaluate this
+project.
 
-Deployment is the secondary path, documented separately:
-
-```bash
-npm --prefix infra run deploy
-```
-
-**The design constraint that follows:** the business logic must not know whether it is running in
-Lambda or Uvicorn, and the repository layer must not know whether it is talking to DynamoDB Local or
-real DynamoDB. Both are satisfied by a `Settings`-driven endpoint override and a repository interface,
-so the identical container image runs in both places. If local and deployed could diverge, the local
-path would rot and the reviewer would be the one to discover it.
+**The design constraint that follows:** the pipeline must be able to run at import time without
+blocking on anything external, and the business logic must not know where its output is stored.
+A repository interface satisfies the second half; the first is why the store is in-process. The
+single command is the only path, so there is no second path to drift out of sync with it.
 
 ---
 
@@ -59,7 +53,7 @@ event_sync_service/
 ├── data/                          # provided source files (unmodified)
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                # FastAPI app + Mangum adapter for Lambda
+│   │   ├── main.py                # FastAPI app + startup sync
 │   │   ├── config.py              # Settings (env-driven)
 │   │   ├── api/routes.py          # HTTP layer only — no logic
 │   │   ├── models/                # Pydantic: NormalizedEvent, UnifiedMeeting, ProvenanceField…
@@ -69,11 +63,10 @@ event_sync_service/
 │   │   │   ├── dedupe.py          # intra-source
 │   │   │   ├── matcher.py         # scoring + assignment
 │   │   │   └── merge.py           # precedence + provenance
-│   │   ├── repository/            # DynamoDBRepository + InMemoryRepository
+│   │   ├── repository/            # Repository protocol + InMemoryRepository
 │   │   └── jobs/sync.py           # the pipeline entrypoint
 │   └── tests/
 ├── frontend/                      # Next.js
-├── infra/                         # CDK app
 ├── docs/ai-collaboration/         # this folder
 ├── docker-compose.yml
 └── README.md
@@ -84,35 +77,38 @@ event_sync_service/
 would make the interesting part of this project a single 400-line function, and the pipeline stages
 are exactly the seams a reviewer will want to inspect.
 
-The pure functions in `reconcile/` take and return plain models — no I/O, no AWS, no framework. That
+The pure functions in `reconcile/` take and return plain models — no I/O, no framework. That
 is what lets the correctness fixture run in milliseconds with no containers.
 
 ---
 
-## Data model (DynamoDB single-table)
+## Data model
 
-One table, `EventSyncTable`:
+A sync run produces one immutable `SyncResult`, and that object *is* the store:
 
-| Entity | PK | SK |
+| Field | Shape | Serves |
 |---|---|---|
-| Unified meeting | `MEETING#<id>` | `META` |
-| Raw source record | `MEETING#<id>` | `SOURCE#CRM#CRM-1001` |
-| Sync run summary | `SYNC#<run_id>` | `META` |
+| `meetings` | `dict[str, UnifiedMeeting]` | detail view by id |
+| `by_date` | `list[str]`, meeting ids in `(date, start_time)` order | the list view, already sorted |
+| `summary` | `SyncRunSummary` — counts in/out, matched, conflicts by kind, quality flags by code | `GET /api/stats` |
 
-GSI1 (`GSI1PK = DATE#<yyyy-mm-dd>`, `GSI1SK = <start_time>#<id>`) serves the primary list view in
-date order.
-
-**Why single-table.** The dominant access pattern is "fetch a meeting with all of its source records,"
-which is one query on a shared partition key. Storing the raw source records adjacent to the merged
-record is also what makes the provenance UI cheap: the detail view is one query, not a join.
+Each `UnifiedMeeting` carries its own raw source records inline, so the detail view is a single
+dictionary lookup rather than a join across collections.
 
 **Why store raw records at all.** The frontend must show the user what each source said. Keeping the
 raw payload means the merge can be re-run with different precedence rules without re-ingesting, and
 the API can always answer "what did the CRM actually say?" — which is the whole provenance feature.
 
-**Consistency.** A sync run writes a new generation and flips a pointer, so readers never observe a
-half-written dataset. At 24 items this is theatre; it is the correct pattern at scale and costs
-nothing to express.
+**Consistency.** `POST /api/sync` builds a complete new `SyncResult` and then rebinds a single
+reference, so a reader either sees the entire previous dataset or the entire new one, never a
+half-written mix. At 24 items the atomic swap costs nothing, and it is the reason a re-sync while the
+UI is open cannot produce a torn read.
+
+**The repository interface.** Routes depend on a `Repository` protocol (`list_meetings`, `get_meeting`,
+`get_stats`, `replace_all`), not on the dictionaries. `InMemoryRepository` is the only implementation.
+The seam exists because the store is the one component whose choice is driven by the fixture-sized
+dataset rather than by the problem — if the sources became live APIs, that is the file that changes,
+and nothing in `reconcile/` would notice.
 
 ---
 
@@ -152,6 +148,11 @@ making provenance and conflicts legible.
 
 ## What is deliberately out of scope
 
-Auth, pagination, real upstream API clients with retry/backoff, DynamoDB streams, CloudWatch alarms,
+Auth, pagination, real upstream API clients with retry/backoff, durable storage, cloud deployment,
 CI/CD. Each is a paragraph in the README explaining what would change, which is more useful to a
 reviewer than a half-built version of any of them.
+
+Deployment is the largest of these omissions, so it gets the explicit note: this service is built to
+be run locally by a reviewer, and a hosted environment would need a persistent repository
+implementation, real ingest scheduling, and secrets handling before it meant anything. Sketching that
+in infrastructure code without those pieces would document an intention, not a system.
